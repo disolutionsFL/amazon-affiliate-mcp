@@ -24,11 +24,14 @@ KI-Assistenten erhalten 8 spezialisierte Tools:
 ## Voraussetzungen
 
 - **Node.js** ≥ 18
-- Ein Amazon-Partnerprogramm-Konto ([affiliate-program.amazon.de](https://affiliate-program.amazon.de))
-- Dein Affiliate-Tag (aktuell konfiguriert: `addonsdeaddonssh`)
+- Ein Amazon-Partnerprogramm-Konto (z.B. [affiliate-program.amazon.com](https://affiliate-program.amazon.com) für die USA)
+- Dein Affiliate-Tag — **kein Tag ist im Code hinterlegt**. Tags werden ausschließlich über Umgebungsvariablen
+  (`AMAZON_AFFILIATE_TAG_<CC>` / `AMAZON_AFFILIATE_TAG`) gesetzt **oder** pro Aufruf über den optionalen
+  Tool-Parameter `affiliate_tag` übergeben (siehe [Dynamischer Affiliate-Tag](#dynamischer-affiliate-tag-pro-aufruf)).
 
-> **Wichtig:** Amazon-Affiliate-Tags enden für `.de` normalerweise auf `-21` (z.B. `meintag-21`).  
-> Stelle sicher, dass dein Tag in deinem [PartnerNet-Konto](https://affiliate-program.amazon.de) hinterlegt ist.
+> **Wichtig:** US-Affiliate-Tags enden i.d.R. auf `-20` (z.B. `mytag-20`), `.de`-Tags auf `-21` (z.B. `meintag-21`).
+> Der Standard-Marktplatz ist `us` (über `AMAZON_DEFAULT_COUNTRY` änderbar).
+> Stelle sicher, dass dein Tag in deinem PartnerNet-Konto hinterlegt ist.
 
 ---
 
@@ -71,9 +74,9 @@ WorkingDirectory=/opt/amazon-affiliate-mcp
 Environment=NODE_ENV=production
 Environment=MCP_MODE=http
 Environment=PORT=3000
-Environment=AMAZON_DEFAULT_COUNTRY=de
-Environment=AMAZON_AFFILIATE_TAG_DE=deintag-21
-Environment=AMAZON_AFFILIATE_TAG=deintag-21
+Environment=AMAZON_DEFAULT_COUNTRY=us
+Environment=AMAZON_AFFILIATE_TAG_US=deintag-20
+Environment=AMAZON_AFFILIATE_TAG=deintag-20
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
@@ -169,7 +172,7 @@ Bearbeite `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "command": "node",
       "args": ["/Users/DEIN_BENUTZERNAME/amazon-affiliate-mcp/dist/index.js"],
       "env": {
-        "AMAZON_AFFILIATE_TAG": "addonsdeaddonssh"
+        "AMAZON_AFFILIATE_TAG": "deintag-20"
       }
     }
   }
@@ -208,7 +211,7 @@ Erstelle oder bearbeite `.vscode/mcp.json` im Workspace:
       "command": "node",
       "args": ["/Users/DEIN_BENUTZERNAME/amazon-affiliate-mcp/dist/index.js"],
       "env": {
-        "AMAZON_AFFILIATE_TAG": "addonsdeaddonssh"
+        "AMAZON_AFFILIATE_TAG": "deintag-20"
       }
     }
   }
@@ -221,22 +224,46 @@ Erstelle oder bearbeite `.vscode/mcp.json` im Workspace:
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `AMAZON_AFFILIATE_TAG` | `addonsdeaddonssh` | Dein Affiliate-Tag |
-| `AMAZON_BASE_URL` | `https://www.amazon.de` | Amazon-Domain (z.B. `.com` für USA) |
+| `AMAZON_DEFAULT_COUNTRY` | `us` | Standard-Marktplatz, wenn kein `country` übergeben wird (z.B. `us`, `de`, `uk`, `fr`). |
+| `AMAZON_AFFILIATE_TAG` | _(leer)_ | Generischer Affiliate-Tag. Wird für den Standard-Marktplatz (`us`) verwendet, wenn kein länderspezifischer Tag gesetzt ist. |
+| `AMAZON_AFFILIATE_TAG_US` | _(leer)_ | Tag für amazon.com. |
+| `AMAZON_AFFILIATE_TAG_DE` | _(leer)_ | Tag für amazon.de. |
+| `AMAZON_AFFILIATE_TAG_<CC>` | _(leer)_ | Tag für den jeweiligen Marktplatz. `<CC>` = `US`, `DE`, `UK`, `FR`, `IT`, `ES`, `CA`, `AU`, `JP`, … |
+| `MCP_MODE` | _(auto)_ | `http` startet den HTTP-Server; sonst stdio. Wird automatisch auf `http` gesetzt, wenn `PORT` gesetzt ist. |
+| `PORT` | `3000` | Port im HTTP-Modus. |
+
+> **Kein Affiliate-Tag ist im Code hinterlegt.** Ist für einen Marktplatz kein Tag konfiguriert (und wird auch
+> keiner per Aufruf übergeben), bleibt der `tag`-Parameter im erzeugten Link leer.
+
+### Dynamischer Affiliate-Tag (pro Aufruf)
+
+Alle link-erzeugenden Tools (`amazon_search`, `amazon_product_link`, `amazon_deals`, `amazon_bestsellers`,
+`amazon_gift_finder`, `amazon_compare`, `amazon_promo_content`) akzeptieren einen optionalen Parameter
+**`affiliate_tag`**. Wird er gesetzt (nicht leer), überschreibt er für diesen einen Aufruf den per
+Umgebungsvariable konfigurierten Tag des gewählten Marktplatzes.
+
+Auflösungsreihenfolge des Tags pro Aufruf:
+
+1. `affiliate_tag` (Tool-Parameter) — falls gesetzt und nicht leer
+2. `AMAZON_AFFILIATE_TAG_<CC>` für den gewählten Marktplatz
+3. `AMAZON_AFFILIATE_TAG` (nur für den Standard-Marktplatz `us`)
+4. leer
+
+So kann ein einzelner Server mehrere Tags dynamisch bedienen, statt fest auf einen Tag verdrahtet zu sein.
 
 ---
 
 ## Beispiel-Nutzung in der KI
 
-**Nutzer:** „Empfiehl mir gute Bluetooth-Kopfhörer unter 100 Euro."
+**Nutzer:** „Recommend good Bluetooth headphones under $100."
 
 **KI verwendet `amazon_search`:**
-- query: `Bluetooth Kopfhörer`
+- query: `Bluetooth headphones`
 - category: `elektronik`
 - price_max: `100`
 
-**KI antwortet mit:**  
-`https://www.amazon.de/s?k=Bluetooth+Kopfhörer&tag=addonsdeaddonssh&i=electronics&high-price=100`
+**KI antwortet mit (Tag aus `AMAZON_AFFILIATE_TAG_US`, hier `deintag-20`):**  
+`https://www.amazon.com/s?k=Bluetooth+headphones&tag=deintag-20&i=electronics&high-price=100`
 
 **Jeder Kauf über diesen Link = Provision für dich.**
 

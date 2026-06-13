@@ -24,7 +24,7 @@ startCommand:
         type: string
         title: Default Country
         description: "Default Amazon storefront to use when no country is specified. Supported: de, at, us, uk, fr, es, it, nl, pl, se, jp, ca, au, mx, br, in, sg, ae, sa, tr"
-        default: "de"
+        default: "us"
         enum: ["de", "at", "us", "uk", "fr", "es", "it", "nl", "pl", "se", "jp", "ca", "au", "mx", "br", "in", "sg", "ae", "sa", "tr"]
       affiliateTagDe:
         type: string

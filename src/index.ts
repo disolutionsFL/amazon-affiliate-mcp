@@ -5,7 +5,8 @@
  * Stellt KI-Assistenten Tools bereit, um Amazon-Produktlinks mit Affiliate-Tag
  * zu generieren, Angebote zu finden und Werbetexte zu erstellen.
  *
- * Affiliate-Tag: addonsdeaddonssh
+ * Affiliate-Tag: read from env (AMAZON_AFFILIATE_TAG_<CC> / AMAZON_AFFILIATE_TAG).
+ * No tag is hardcoded -- an unconfigured country yields an empty tag.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,9 +24,9 @@ interface LandConfig {
 }
 
 const LAENDER: Record<string, LandConfig> = {
-  de: { domain: "https://www.amazon.de",     name: "Deutschland",    currency: "EUR", tag: process.env.AMAZON_AFFILIATE_TAG_DE ?? process.env.AMAZON_AFFILIATE_TAG ?? "addonsdeaddonssh" },
+  de: { domain: "https://www.amazon.de",     name: "Deutschland",    currency: "EUR", tag: process.env.AMAZON_AFFILIATE_TAG_DE ?? "" },
   at: { domain: "https://www.amazon.at",     name: "Österreich",     currency: "EUR", tag: process.env.AMAZON_AFFILIATE_TAG_AT ?? "" },
-  us: { domain: "https://www.amazon.com",    name: "USA",            currency: "USD", tag: process.env.AMAZON_AFFILIATE_TAG_US ?? "addonsdeaddon-20" },
+  us: { domain: "https://www.amazon.com",    name: "USA",            currency: "USD", tag: process.env.AMAZON_AFFILIATE_TAG_US ?? process.env.AMAZON_AFFILIATE_TAG ?? "" },
   uk: { domain: "https://www.amazon.co.uk",  name: "Großbritannien", currency: "GBP", tag: process.env.AMAZON_AFFILIATE_TAG_UK ?? "" },
   fr: { domain: "https://www.amazon.fr",     name: "Frankreich",     currency: "EUR", tag: process.env.AMAZON_AFFILIATE_TAG_FR ?? "" },
   es: { domain: "https://www.amazon.es",     name: "Spanien",        currency: "EUR", tag: process.env.AMAZON_AFFILIATE_TAG_ES ?? "" },
@@ -46,11 +47,18 @@ const LAENDER: Record<string, LandConfig> = {
 };
 
 const LAND_CODES = Object.keys(LAENDER) as [string, ...string[]];
-const DEFAULT_COUNTRY = (process.env.AMAZON_DEFAULT_COUNTRY ?? "de").toLowerCase() as keyof typeof LAENDER;
+const DEFAULT_COUNTRY = (process.env.AMAZON_DEFAULT_COUNTRY ?? "us").toLowerCase() as keyof typeof LAENDER;
 
 function getLand(country?: string): LandConfig {
   const c = (country ?? DEFAULT_COUNTRY).toLowerCase();
-  return LAENDER[c] ?? LAENDER["de"]!;
+  return LAENDER[c] ?? LAENDER["us"]!;
+}
+
+// Resolve the affiliate tag for a request: an explicit per-call override (if
+// non-empty) always wins over the env-configured default for the country.
+function resolveTag(land: LandConfig, override?: string): string {
+  const o = override?.trim();
+  return o && o.length > 0 ? o : land.tag;
 }
 
 // ── Kategorie-Mapping (Amazon browse-node Schlüssel) ─────────────────────────
@@ -78,18 +86,24 @@ const CATEGORIES: Record<string, string> = {
 };
 const CATEGORY_KEYS = Object.keys(CATEGORIES).join(", ");
 
+// Shared description for the optional per-call affiliate-tag override.
+const AFFILIATE_TAG_DESC =
+  "Optional Amazon Associates tag to embed in the generated links (e.g. 'mytag-20'). " +
+  "Overrides the server's env-configured default for this call. Leave empty to use the default.";
+
 // ── URL-Builder ───────────────────────────────────────────────────────────────
 function buildSearchUrl(
   query: string,
   country?: string,
   category?: string,
   priceMin?: number,
-  priceMax?: number
+  priceMax?: number,
+  affiliateTag?: string
 ): string {
   const land = getLand(country);
   const params = new URLSearchParams({
     k: query,
-    tag: land.tag,
+    tag: resolveTag(land, affiliateTag),
     ref: "sr_nr_p_36_0",
   });
   const cat = category?.toLowerCase();
@@ -99,15 +113,15 @@ function buildSearchUrl(
   return `${land.domain}/s?${params.toString()}`;
 }
 
-function buildProductUrl(asin: string, country?: string): string {
+function buildProductUrl(asin: string, country?: string, affiliateTag?: string): string {
   const land = getLand(country);
-  return `${land.domain}/dp/${encodeURIComponent(asin)}?tag=${land.tag}`;
+  return `${land.domain}/dp/${encodeURIComponent(asin)}?tag=${resolveTag(land, affiliateTag)}`;
 }
 
-function buildDealsUrl(country?: string, type?: string): string {
+function buildDealsUrl(country?: string, type?: string, affiliateTag?: string): string {
   const land = getLand(country);
   const base = land.domain;
-  const tag = land.tag;
+  const tag = resolveTag(land, affiliateTag);
   switch (type) {
     case "blitzangebote":
       return `${base}/deals?tag=${tag}&ref=nav_cs_gb`;
@@ -122,13 +136,14 @@ function buildDealsUrl(country?: string, type?: string): string {
   }
 }
 
-function buildBestsellerUrl(country?: string, category?: string): string {
+function buildBestsellerUrl(country?: string, category?: string, affiliateTag?: string): string {
   const land = getLand(country);
   const cat = category?.toLowerCase();
   const node = cat ? CATEGORIES[cat] : undefined;
+  const tag = resolveTag(land, affiliateTag);
   return node
-    ? `${land.domain}/bestsellers/${node}?tag=${land.tag}`
-    : `${land.domain}/bestsellers?tag=${land.tag}`;
+    ? `${land.domain}/bestsellers/${node}?tag=${tag}`
+    : `${land.domain}/bestsellers?tag=${tag}`;
 }
 
 // ── Server-Factory ──────────────────────────────────────────────────────────────
@@ -184,10 +199,11 @@ server.tool(
       .min(0)
       .optional()
       .describe("Maximum price in the local currency of the selected country"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ query, country, category, price_min, price_max }) => {
+  async ({ query, country, category, price_min, price_max, affiliate_tag }) => {
     const land = getLand(country);
-    const url = buildSearchUrl(query, country, category, price_min, price_max);
+    const url = buildSearchUrl(query, country, category, price_min, price_max, affiliate_tag);
     const priceInfo =
       price_min !== undefined || price_max !== undefined
         ? ` (${price_min ?? 0} – ${price_max ?? "∞"} ${land.currency})`
@@ -203,7 +219,7 @@ server.tool(
               land: land.name,
               domain: land.domain,
               currency: land.currency,
-              affiliate_tag: land.tag,
+              affiliate_tag: resolveTag(land, affiliate_tag),
               category: category ?? "alle Kategorien",
               price_range: priceInfo || "kein Filter",
               affiliate_search_url: url,
@@ -240,11 +256,12 @@ server.tool(
       .string()
       .optional()
       .describe("Optional product name to include in the response for display purposes"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ asin, country, product_name }) => {
+  async ({ asin, country, product_name, affiliate_tag }) => {
     const cleanAsin = asin.trim().toUpperCase();
     const land = getLand(country);
-    const url = buildProductUrl(cleanAsin, country);
+    const url = buildProductUrl(cleanAsin, country, affiliate_tag);
     return {
       content: [
         {
@@ -255,7 +272,7 @@ server.tool(
               asin: cleanAsin,
               land: land.name,
               domain: land.domain,
-              affiliate_tag: land.tag,
+              affiliate_tag: resolveTag(land, affiliate_tag),
               product_name: product_name ?? "Produkt",
               affiliate_url: url,
               hinweis:
@@ -289,10 +306,11 @@ server.tool(
       .describe(
         "Type of deal: alle (all deals) | blitzangebote (lightning/flash deals) | outlet (clearance) | warehouse (open-box) | prime (Prime-exclusive)"
       ),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ country, deal_type }) => {
+  async ({ country, deal_type, affiliate_tag }) => {
     const land = getLand(country);
-    const url = buildDealsUrl(country, deal_type === "alle" ? undefined : deal_type);
+    const url = buildDealsUrl(country, deal_type === "alle" ? undefined : deal_type, affiliate_tag);
     const labels: Record<string, string> = {
       alle: "Alle aktuellen Amazon-Deals",
       blitzangebote: "Zeitlich begrenzte Blitzangebote",
@@ -341,10 +359,11 @@ server.tool(
       .string()
       .optional()
       .describe("Product category, e.g. elektronik (electronics), bücher (books), spielzeug (toys)"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ country, category }) => {
+  async ({ country, category, affiliate_tag }) => {
     const land = getLand(country);
-    const url = buildBestsellerUrl(country, category);
+    const url = buildBestsellerUrl(country, category, affiliate_tag);
     return {
       content: [
         {
@@ -397,16 +416,18 @@ server.tool(
       .string()
       .optional()
       .describe("Occasion for the gift, e.g. Birthday, Christmas, Wedding"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ empfaenger, country, budget_min, budget_max, interessen = [], anlass }) => {
+  async ({ empfaenger, country, budget_min, budget_max, interessen = [], anlass, affiliate_tag }) => {
     const land = getLand(country);
+    const tag = resolveTag(land, affiliate_tag);
     const suchanfragen: Array<{ name: string; url: string }> = [];
 
     // Gezielte Suchen nach Interessen (max. 4)
     for (const interesse of interessen.slice(0, 4)) {
       const params = new URLSearchParams({
         k: `${interesse} gift`,
-        tag: land.tag,
+        tag,
       });
       if (budget_min !== undefined) params.set("low-price", String(budget_min));
       if (budget_max !== undefined) params.set("high-price", String(budget_max));
@@ -420,7 +441,7 @@ server.tool(
     if (interessen.length === 0) {
       const params = new URLSearchParams({
         k: `gift ${empfaenger}`,
-        tag: land.tag,
+        tag,
       });
       if (budget_min !== undefined) params.set("low-price", String(budget_min));
       if (budget_max !== undefined) params.set("high-price", String(budget_max));
@@ -430,10 +451,10 @@ server.tool(
       });
     }
 
-    // Immer: Gutschein als sichere Option
+    // Immer: Gutschein als sichere Option (Suche statt fester ASIN -- ASINs sind länderspezifisch)
     suchanfragen.push({
-      name: "Amazon Geschenkgutschein (immer passend)",
-      url: `${land.domain}/dp/B004LLIKVU?tag=${land.tag}`,
+      name: "Amazon Gift Card (immer passend)",
+      url: `${land.domain}/s?${new URLSearchParams({ k: "amazon gift card", tag }).toString()}`,
     });
 
     return {
@@ -488,14 +509,15 @@ server.tool(
       .array(z.string())
       .optional()
       .describe("Optional product names in the same order as the ASINs, used for display"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ asins, country, produktnamen = [] }) => {
+  async ({ asins, country, produktnamen = [], affiliate_tag }) => {
     const land = getLand(country);
     const produkte = asins.map((asin, i) => ({
       rang: i + 1,
       asin: asin.trim().toUpperCase(),
       name: produktnamen[i] ?? `Produkt ${i + 1}`,
-      affiliate_url: buildProductUrl(asin.trim().toUpperCase(), country),
+      affiliate_url: buildProductUrl(asin.trim().toUpperCase(), country, affiliate_tag),
     }));
 
     return {
@@ -548,11 +570,12 @@ server.tool(
       .default("de")
       .describe("Output language: de (German) or en (English)"),
     preis: z.string().optional().describe("Product price to include in the copy, e.g. '$29.99'"),
+    affiliate_tag: z.string().optional().describe(AFFILIATE_TAG_DESC),
   },
-  async ({ produktname, country, asin, suchbegriff, plattform, sprache, preis }) => {
+  async ({ produktname, country, asin, suchbegriff, plattform, sprache, preis, affiliate_tag }) => {
     const url = asin
-      ? buildProductUrl(asin.trim().toUpperCase(), country)
-      : buildSearchUrl(suchbegriff ?? produktname, country);
+      ? buildProductUrl(asin.trim().toUpperCase(), country, affiliate_tag)
+      : buildSearchUrl(suchbegriff ?? produktname, country, undefined, undefined, undefined, affiliate_tag);
 
     const preisInfo = preis ? ` – nur ${preis}` : "";
 
